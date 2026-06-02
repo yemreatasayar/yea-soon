@@ -1382,59 +1382,67 @@ if (orbitSystem && orbitItems.length) {
   requestAnimationFrame(animateOrbit);
 }
 
-const WEB3FORMS_ACCESS_KEY = '836a3662-f267-47a0-98c5-9b783f0f602c';
+const CONTACT_ENDPOINT = 'https://yea-contact.highlevelsocial.workers.dev';
 
 document.querySelectorAll('.contact-form').forEach((form) => {
+  let status = form.querySelector('.contact-form__status');
+  if (!status) {
+    status = document.createElement('p');
+    status.className = 'contact-form__status';
+    status.setAttribute('role', 'status');
+    status.setAttribute('aria-live', 'polite');
+    form.appendChild(status);
+  }
+  const setStatus = (text, state) => {
+    status.textContent = text || '';
+    status.classList.remove('is-success', 'is-error');
+    if (state) status.classList.add(`is-${state}`);
+  };
+
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
 
     const button = form.querySelector('button[type="submit"]');
     const originalText = button?.textContent || 'send message';
-    const formData = new FormData(form);
+    setStatus('', null);
 
-    formData.append('access_key', WEB3FORMS_ACCESS_KEY);
-    formData.append('subject', 'New message from yemreatasayar.com');
-    formData.append('from_name', 'Yusuf Emre Atasayar website');
-    formData.append('page', window.location.href);
-
+    if (button) {
+      button.disabled = true;
+      button.textContent = 'sending...';
+    }
     window.yeaTrack?.('contact_form_attempt', {
       page_path: window.location.pathname,
     });
 
-    if (button) {
-      button.disabled = true;
-      button.textContent = 'Sending...';
-    }
-
     try {
-      const response = await fetch('https://api.web3forms.com/submit', {
+      const response = await fetch(CONTACT_ENDPOINT, {
         method: 'POST',
-        body: formData,
+        body: new FormData(form),
       });
-      const result = await response.json();
+      const result = await response.json().catch(() => ({}));
 
       if (!response.ok || !result.success) {
         throw new Error(result.message || 'Message could not be sent.');
       }
 
       form.reset();
+      window.turnstile?.reset();
       window.yeaTrack?.('contact_form_submit', {
         page_path: window.location.pathname,
       });
-      if (button) button.textContent = 'Message sent';
+      setStatus('Thanks, your message has been sent. I will get back to you soon.', 'success');
     } catch (error) {
+      window.turnstile?.reset();
       window.yeaTrack?.('contact_form_error', {
         label: error?.message || 'send_failed',
         page_path: window.location.pathname,
       });
-      if (button) button.textContent = 'Try again';
+      setStatus(error?.message || 'Something went wrong. Please try again.', 'error');
     } finally {
-      window.setTimeout(() => {
-        if (button) {
-          button.disabled = false;
-          button.textContent = originalText;
-        }
-      }, 2200);
+      if (button) {
+        button.disabled = false;
+        button.textContent = originalText;
+      }
     }
   });
 });

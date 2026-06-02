@@ -1125,6 +1125,30 @@ body.is-cosmic-idle .star {
   transform: none;
 }
 
+.contact-form__status {
+  margin-top: 16px;
+  font-size: 14px;
+  line-height: 1.5;
+  letter-spacing: 0.02em;
+  opacity: 0;
+  transform: translateY(6px);
+  transition: opacity 320ms ease, transform 320ms ease;
+}
+
+.contact-form__status.is-success,
+.contact-form__status.is-error {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.contact-form__status.is-success {
+  color: #9ed8b1;
+}
+
+.contact-form__status.is-error {
+  color: #e59a95;
+}
+
 .about-main {
   padding-top: 72px;
 }
