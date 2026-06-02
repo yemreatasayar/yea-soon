@@ -1,0 +1,16 @@
+{
+  "name": "Yusuf Emre Atasayar",
+  "short_name": "YEA",
+  "description": "Art director, graphic designer and vibe coder working across visual systems, campaigns and self-initiated experiments.",
+  "start_url": "/",
+  "display": "minimal-ui",
+  "background_color": "#050505",
+  "theme_color": "#050505",
+  "icons": [
+    {
+      "src": "/assets/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}
