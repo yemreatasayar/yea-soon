@@ -687,13 +687,13 @@ function bindSoundCloudWidget(iframeEl, initialSeekMs) {
   }
 }
 
-function createSoundCloudIframe(startMs) {
+function createSoundCloudIframe(startMs, autoPlay = true) {
   if (soundCloudFrame) return;
   const startPositionMs = Math.max(0, Math.floor(startMs || 0));
   const container = document.createElement('div');
   container.className = 'soundcloud-player';
   container.setAttribute('aria-hidden', 'true');
-  const src = `${buildSoundCloudSrc(getCurrentTrack())}&auto_play=true`;
+  const src = `${buildSoundCloudSrc(getCurrentTrack())}&auto_play=${autoPlay ? 'true' : 'false'}`;
   container.innerHTML = `<iframe title="SoundCloud background audio" width="100%" height="20" scrolling="no" frameborder="no" allow="autoplay; encrypted-media" src="${src}"></iframe>`;
   document.body.appendChild(container);
   soundCloudFrame = container;
@@ -876,12 +876,16 @@ syncBlogReadingRadioUI();
 // wired up: per the agreed UX, only the icon itself toggles the menu.
 soundToggle?.addEventListener('click', () => {
   // Mobile: no slide-out menu; tapping the icon plays a random track (or stops).
+  // Reuse the (pre-warmed) iframe and play/pause it in-gesture; iOS ignores a
+  // deferred play() on a freshly built iframe, so never destroy/recreate here.
   if (window.matchMedia('(max-width: 760px)').matches) {
-    if (soundCloudIsActuallyPlaying) {
+    if (siteSoundEnabled) {
       stopSiteSound();
       window.yeaTrack?.('sound_toggle', { label: 'sound_off', page_path: window.location.pathname });
     } else {
-      if (SOUND_TRACKS.length > 1) switchToTrack(Math.floor(Math.random() * SOUND_TRACKS.length));
+      if (!soundCloudFrame && SOUND_TRACKS.length > 1) {
+        currentTrackIndex = Math.floor(Math.random() * SOUND_TRACKS.length);
+      }
       startSiteSound();
       window.yeaTrack?.('sound_toggle', { label: 'sound_on_random', page_path: window.location.pathname });
     }
@@ -892,6 +896,18 @@ soundToggle?.addEventListener('click', () => {
   setSoundMenuOpen(!isOpen);
   if (!isOpen) syncSoundUI(); // refresh play label, artist href when opening
 });
+
+// iOS only plays a SoundCloud widget reliably when it is already loaded at tap
+// time. On mobile, warm a paused iframe on the first user gesture so the later
+// music-icon tap can play() an already-ready widget within the gesture.
+if (window.matchMedia('(max-width: 760px)').matches) {
+  window.addEventListener('pointerdown', () => {
+    if (!soundCloudFrame) {
+      if (SOUND_TRACKS.length > 1) currentTrackIndex = Math.floor(Math.random() * SOUND_TRACKS.length);
+      createSoundCloudIframe(0, false);
+    }
+  }, { once: true });
+}
 
 // Switch to a different track in SOUND_TRACKS, reset playback to start.
 function switchToTrack(nextIndex) {
