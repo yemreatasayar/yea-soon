@@ -41,7 +41,11 @@ const revealObserver = new IntersectionObserver(
   },
 );
 
+const revealInstant = window.matchMedia('(max-width: 760px)').matches;
+if (revealInstant) document.documentElement.classList.add('reveal-instant');
+
 document.querySelectorAll('[data-reveal]').forEach((element, index) => {
+  if (revealInstant) return; // mobile: load everything at once, no scroll reveal
   if (!element.style.getPropertyValue('--reveal-delay')) {
     element.style.setProperty('--reveal-delay', `${Math.min(index * 34, 180)}ms`);
   }
@@ -866,6 +870,19 @@ syncBlogReadingRadioUI();
 // the icon again closes it. Click-outside and Escape are intentionally not
 // wired up: per the agreed UX, only the icon itself toggles the menu.
 soundToggle?.addEventListener('click', () => {
+  // Mobile: no slide-out menu; tapping the icon plays a random track (or stops).
+  if (window.matchMedia('(max-width: 760px)').matches) {
+    if (soundCloudIsActuallyPlaying) {
+      stopSiteSound();
+      window.yeaTrack?.('sound_toggle', { label: 'sound_off', page_path: window.location.pathname });
+    } else {
+      if (SOUND_TRACKS.length > 1) switchToTrack(Math.floor(Math.random() * SOUND_TRACKS.length));
+      startSiteSound();
+      window.yeaTrack?.('sound_toggle', { label: 'sound_on_random', page_path: window.location.pathname });
+    }
+    syncSoundUI();
+    return;
+  }
   const isOpen = soundToggle.getAttribute('aria-expanded') === 'true';
   setSoundMenuOpen(!isOpen);
   if (!isOpen) syncSoundUI(); // refresh play label, artist href when opening
@@ -1291,10 +1308,9 @@ function renderOrbit(now) {
 
 function animateOrbit(now) {
   renderOrbit(now);
-
-  if (!prefersReducedMotion) {
-    requestAnimationFrame(animateOrbit);
-  }
+  // Orbit + cosmic idle are the page's signature motion; keep them running
+  // even under prefers-reduced-motion (gentle continuous rotation).
+  requestAnimationFrame(animateOrbit);
 }
 
 orbitItems.forEach((item) => {

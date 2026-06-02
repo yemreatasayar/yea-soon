@@ -1032,6 +1032,11 @@ body.is-cosmic-idle .star {
   padding-top: 4px;
 }
 
+/* Teaser home has no works section before contact, so add space under the hero. */
+#home .contact-section {
+  padding-top: clamp(96px, 13vw, 180px);
+}
+
 .contact-grid {
   display: grid;
   grid-template-columns: minmax(320px, 1fr) minmax(360px, 566px);
@@ -1078,7 +1083,7 @@ body.is-cosmic-idle .star {
   width: 100%;
   color: var(--fg);
   background: transparent;
-  border: 0.5px solid var(--line);
+  border: 1px solid var(--line);
   border-radius: 0;
   outline: none;
   padding: 11px 17px 13px;
@@ -4291,6 +4296,22 @@ body.is-poster-lightbox-open {
   transition-delay: 250ms;
 }
 
+/* Mobile: no scroll-reveal; everything is visible immediately. */
+.reveal-instant [data-reveal],
+.reveal-instant .project-card[data-reveal] .project-index span,
+.reveal-instant .project-card[data-reveal] .project-index h3,
+.reveal-instant .project-card[data-reveal] .project-summary,
+.reveal-instant .project-card[data-reveal] .project-meta,
+.reveal-instant .project-card[data-reveal] .project-actions,
+.reveal-instant .project-card[data-reveal] .project-media,
+.reveal-instant .contact-copy[data-reveal] > *,
+.reveal-instant .contact-copy[data-reveal] .social-links > *,
+.reveal-instant .contact-form[data-reveal] > * {
+  opacity: 1 !important;
+  transform: none !important;
+  transition: none !important;
+}
+
 .project-card.is-visible .project-media,
 .contact-copy.is-visible .social-links {
   transition-delay: 330ms;
@@ -5032,8 +5053,7 @@ body.is-black-hole-open .back-to-top {
   }
 
   .sound-menu {
-    gap: 12px;
-    font-size: 12px;
+    display: none;
   }
 
   .sound-menu.is-open {
@@ -5145,6 +5165,11 @@ body.is-black-hole-open .back-to-top {
 
   .about-portrait {
     margin-top: 6px;
+  }
+
+  .about-grid--intro .about-portrait {
+    order: -1;
+    margin-top: 0;
   }
 
   .about-stack {
