@@ -4312,6 +4312,13 @@ body.is-poster-lightbox-open {
   transition: none !important;
 }
 
+/* Mobile: filled rating dots show their final (white) state without the fill animation. */
+.reveal-instant .rating span:not(.is-muted) {
+  background: var(--fg);
+  transform: none;
+  animation: none !important;
+}
+
 .project-card.is-visible .project-media,
 .contact-copy.is-visible .social-links {
   transition-delay: 330ms;

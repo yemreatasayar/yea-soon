@@ -48,7 +48,12 @@ const revealInstant = window.matchMedia('(max-width: 760px)').matches;
 if (revealInstant) document.documentElement.classList.add('reveal-instant');
 
 document.querySelectorAll('[data-reveal]').forEach((element, index) => {
-  if (revealInstant) return; // mobile: load everything at once, no scroll reveal
+  if (revealInstant) {
+    // Mobile: apply the final revealed state at once (CSS kills the animation),
+    // so is-visible-dependent styling like the toolbox rating fill still shows.
+    element.classList.add('is-visible');
+    return;
+  }
   if (!element.style.getPropertyValue('--reveal-delay')) {
     element.style.setProperty('--reveal-delay', `${Math.min(index * 34, 180)}ms`);
   }
