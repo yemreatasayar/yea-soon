@@ -1393,7 +1393,7 @@ document.querySelectorAll('.contact-form').forEach((form) => {
     const formData = new FormData(form);
 
     formData.append('access_key', WEB3FORMS_ACCESS_KEY);
-    formData.append('subject', 'New message from yusufemreatasayar.com');
+    formData.append('subject', 'New message from yemreatasayar.com');
     formData.append('from_name', 'Yusuf Emre Atasayar website');
     formData.append('page', window.location.href);
 
