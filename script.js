@@ -1,4 +1,7 @@
 const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+// iOS blocks audio autoplay without a direct gesture (even muted resumes across
+// page loads), so sound handling needs iOS-specific fallbacks.
+const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 
 // Site-wide casual-download blocker for <video> and the PDF catalogue canvas.
 // Removes "Save Video As" / "Open Video in New Tab" / drag-out from default
@@ -898,9 +901,10 @@ soundToggle?.addEventListener('click', () => {
 });
 
 // iOS only plays a SoundCloud widget reliably when it is already loaded at tap
-// time. On mobile, warm a paused iframe on the first user gesture so the later
-// music-icon tap can play() an already-ready widget within the gesture.
-if (window.matchMedia('(max-width: 760px)').matches) {
+// time. Warm a paused iframe on the first user gesture so the later music-icon
+// tap can play() an already-ready widget within the gesture. (iOS only; Android
+// autoplay works without warming.)
+if (isIOS) {
   window.addEventListener('pointerdown', () => {
     if (!soundCloudFrame) {
       if (SOUND_TRACKS.length > 1) currentTrackIndex = Math.floor(Math.random() * SOUND_TRACKS.length);
@@ -1019,8 +1023,15 @@ const AUTO_RESUME_MAX_AGE_MS = 60_000;
     const age = Date.now() - stored.savedAt;
     const isFresh = stored.savedAt > 0 && age >= 0 && age < AUTO_RESUME_MAX_AGE_MS;
     if (stored.enabled && isFresh) {
-      siteSoundEnabled = true;
-      createSoundCloudIframe(stored.positionMs);
+      if (isIOS) {
+        // iOS blocks autoplay on a fresh page load (no user gesture). Warm a
+        // paused iframe at the saved position and keep the UI "off" so a single
+        // tap resumes cleanly, instead of showing "playing" with no audio.
+        createSoundCloudIframe(stored.positionMs, false);
+      } else {
+        siteSoundEnabled = true;
+        createSoundCloudIframe(stored.positionMs);
+      }
     }
   }
   syncSoundUI();
