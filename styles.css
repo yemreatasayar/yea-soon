@@ -290,6 +290,17 @@ textarea {
   transform-origin: left;
 }
 
+/* Inline prose link: blends with body text, only the site accent on hover. */
+.inline-link {
+  color: inherit;
+  transition: color 180ms ease;
+}
+
+.inline-link:hover,
+.inline-link:focus-visible {
+  color: var(--accent);
+}
+
 .hero-section {
   position: relative;
   isolation: isolate;
