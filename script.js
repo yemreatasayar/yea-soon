@@ -636,6 +636,11 @@ function bindSoundCloudWidget(iframeEl, initialSeekMs) {
       if (initialSeekMs > 0 && !didInitialSeek) {
         didInitialSeek = true;
         try { widget.seekTo(initialSeekMs); } catch (_err) { /* ignore */ }
+      }
+      // Mobile browsers ignore the iframe's url-level auto_play, so trigger an
+      // explicit play() here (fires shortly after the tap, within the gesture
+      // activation window) whenever the user intends sound to be on.
+      if (siteSoundEnabled) {
         try { widget.play(); } catch (_err) { /* may be blocked by autoplay policy */ }
       }
     });
