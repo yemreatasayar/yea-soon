@@ -494,8 +494,7 @@ function fetchInlineSvg(img, className) {
 // resumes from the same spot instead of restarting at zero.
 const SOUND_STORAGE_KEY = 'yea.siteSound.v1';
 
-// Library of selectable tracks. Adding entries unlocks the shuffle action
-// in the header sound menu automatically. trackParam is the encoded URL
+// Library of selectable tracks. trackParam is the encoded URL
 // fragment that goes into the SoundCloud widget src; artistUrl is the
 // public SoundCloud page opened by the "artist" action.
 const SOUND_TRACKS = [
@@ -517,6 +516,12 @@ const SOUND_TRACKS = [
     trackParam: 'https%3A%2F%2Fsoundcloud.com%2Fhoughton-festival%2Frecorded-at-houghton-unai-trotti-2024%3Fin%3Duser-999871870%2Fsets%2Fset%26si%3D2a56c931465248ddb52357a8a65a196e%26utm_source%3Dclipboard%26utm_medium%3Dtext%26utm_campaign%3Dsocial_sharing',
     artistUrl: 'https://soundcloud.com/houghton-festival/recorded-at-houghton-unai-trotti-2024?in=user-999871870/sets/set&si=2a56c931465248ddb52357a8a65a196e&utm_source=clipboard&utm_medium=text&utm_campaign=social_sharing',
   },
+  {
+    id: 'nicolas-lutz-fabric-027',
+    title: 'Nicolas Lutz, fabric 027',
+    trackParam: 'https%3A%2F%2Fsoundcloud.com%2Ffabric%2F027-nicolas-lutz-recorded-live-from-fabric',
+    artistUrl: 'https://soundcloud.com/fabric/027-nicolas-lutz-recorded-live-from-fabric',
+  },
 ];
 
 const BLOG_DEFAULT_READING_RADIO_URL =
@@ -531,6 +536,15 @@ let soundCloudLastPositionMs = 0;
 let soundCloudIsActuallyPlaying = false;
 let siteSoundEnabled = false;
 let siteSoundPausedForVideo = false;
+let soundCurrentMeta = null;
+let mediaSessionHandlersReady = false;
+let soundCloudDurationMs = 0;
+let soundProgressSecond = -1;
+let lastSoundStorageWriteAt = 0;
+// Suppress progress-driven slider updates while the user scrubs and briefly
+// after a seek, so the thumb does not snap back to the pre-seek position.
+let soundSeeking = false;
+let soundSeekSettleUntil = 0;
 
 function buildSoundCloudSrc(track) {
   return `https://w.soundcloud.com/player/?url=${track.trackParam}&color=%23e5e5e5&hide_related=true&show_comments=false&show_user=false&show_reposts=false&show_teaser=false&visual=false`;
@@ -542,6 +556,197 @@ function buildSoundCloudSrcFromUrl(url) {
 
 function getCurrentTrack() {
   return SOUND_TRACKS[currentTrackIndex] ?? SOUND_TRACKS[0];
+}
+
+function fallbackSoundArtwork() {
+  return 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512"%3E%3Crect width="512" height="512" fill="%23050505"/%3E%3C/svg%3E';
+}
+
+function getFallbackSoundMeta() {
+  const track = getCurrentTrack();
+  return {
+    title: track?.title || 'site radio',
+    artist: 'yusuf emre atasayar',
+    artwork: fallbackSoundArtwork(),
+    url: track?.artistUrl || window.location.href,
+  };
+}
+
+function normalizeSoundCloudArtwork(url) {
+  if (!url) return fallbackSoundArtwork();
+  return String(url).replace(/-large(\.\w+)$/, '-t500x500$1');
+}
+
+function getCurrentSoundMeta() {
+  return soundCurrentMeta || getFallbackSoundMeta();
+}
+
+function setupSoundPanel() {
+  if (!soundMenu || soundMenu.dataset.soundPanelReady === 'true') return;
+  soundMenu.dataset.soundPanelReady = 'true';
+  soundMenu.innerHTML = `
+    <div class="sound-panel" role="group" aria-label="Site radio">
+      <a class="sound-panel__art-link" data-sound-action="artist" href="#" target="_blank" rel="noopener noreferrer" aria-label="Open current sound">
+        <img class="sound-panel__art" data-sound-artwork src="${fallbackSoundArtwork()}" alt="" loading="lazy">
+      </a>
+      <div class="sound-panel__body">
+        <a class="sound-panel__title" data-sound-action="artist" data-sound-title href="#" target="_blank" rel="noopener noreferrer">site radio</a>
+        <div class="sound-panel__artist" data-sound-artist>yusuf emre atasayar</div>
+        <div class="sound-panel__controls">
+          <button class="sound-panel__button" type="button" data-sound-action="previous" aria-label="Previous sound">
+            <span class="sound-panel__icon sound-panel__icon--previous" aria-hidden="true"></span>
+          </button>
+          <button class="sound-panel__button" type="button" data-sound-action="play" aria-label="Play site sound">
+            <span class="sound-panel__icon sound-panel__icon--play" aria-hidden="true"></span>
+          </button>
+          <button class="sound-panel__button" type="button" data-sound-action="next" aria-label="Next sound">
+            <span class="sound-panel__icon sound-panel__icon--next" aria-hidden="true"></span>
+          </button>
+        </div>
+        <div class="sound-panel__progress" aria-hidden="false">
+          <div class="sound-panel__times">
+            <span data-sound-elapsed>0:00</span>
+            <span data-sound-remaining>-0:00</span>
+          </div>
+          <input class="sound-panel__range" data-sound-progress type="range" min="0" max="1000" value="0" step="1" aria-label="Seek sound">
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function formatSoundTime(ms) {
+  const totalSeconds = Math.max(0, Math.floor((Number(ms) || 0) / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = String(totalSeconds % 60).padStart(2, '0');
+  return `${minutes}:${seconds}`;
+}
+
+function updateSoundProgressUI() {
+  const elapsed = Math.max(0, soundCloudLastPositionMs || 0);
+  const duration = Math.max(0, soundCloudDurationMs || 0);
+  const remaining = duration > 0 ? Math.max(0, duration - elapsed) : 0;
+  const value = duration > 0 ? Math.min(1000, Math.max(0, Math.round((elapsed / duration) * 1000))) : 0;
+  const elapsedText = formatSoundTime(elapsed);
+  const remainingText = `-${formatSoundTime(remaining)}`;
+
+  document.querySelectorAll('[data-sound-elapsed]').forEach((el) => {
+    if (el.textContent !== elapsedText) el.textContent = elapsedText;
+  });
+  document.querySelectorAll('[data-sound-remaining]').forEach((el) => {
+    if (el.textContent !== remainingText) el.textContent = remainingText;
+  });
+  document.querySelectorAll('[data-sound-progress]').forEach((el) => {
+    if (el.value !== String(value)) el.value = String(value);
+    el.disabled = duration <= 0;
+    el.style.setProperty('--sound-progress', `${value / 10}%`);
+  });
+}
+
+function scheduleStoredSoundStateWrite() {
+  const now = Date.now();
+  if (now - lastSoundStorageWriteAt < 1800) return;
+  lastSoundStorageWriteAt = now;
+  writeStoredSoundState();
+}
+
+function updateMediaSession() {
+  if (!('mediaSession' in navigator) || typeof window.MediaMetadata !== 'function') return;
+  const meta = getCurrentSoundMeta();
+  try {
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: meta.title,
+      artist: meta.artist || 'yusuf emre atasayar',
+      album: 'yusuf emre atasayar site radio',
+      artwork: [
+        { src: meta.artwork, sizes: '96x96', type: 'image/jpeg' },
+        { src: meta.artwork, sizes: '512x512', type: 'image/jpeg' },
+      ],
+    });
+    navigator.mediaSession.playbackState = soundCloudIsActuallyPlaying ? 'playing' : 'paused';
+    if (!mediaSessionHandlersReady) {
+      mediaSessionHandlersReady = true;
+      navigator.mediaSession.setActionHandler('play', () => startSiteSound());
+      navigator.mediaSession.setActionHandler('pause', () => stopSiteSound());
+      navigator.mediaSession.setActionHandler('nexttrack', () => switchToTrack(currentTrackIndex + 1));
+      navigator.mediaSession.setActionHandler('previoustrack', () => switchToTrack(currentTrackIndex - 1));
+      navigator.mediaSession.setActionHandler('seekbackward', () => {
+        if (!soundCloudWidget) return;
+        try { soundCloudWidget.seekTo(Math.max(0, soundCloudLastPositionMs - 10000)); } catch (_err) { /* ignore */ }
+      });
+      navigator.mediaSession.setActionHandler('seekforward', () => {
+        if (!soundCloudWidget) return;
+        try { soundCloudWidget.seekTo(soundCloudLastPositionMs + 10000); } catch (_err) { /* ignore */ }
+      });
+    }
+  } catch (_err) {
+    // Some browsers expose the API but reject third-party artwork/action
+    // combinations. The in-page player remains the source of truth.
+  }
+}
+
+function syncSoundPanelMeta() {
+  if (!soundMenu) return;
+  const meta = getCurrentSoundMeta();
+  document.querySelectorAll('[data-sound-title]').forEach((el) => {
+    el.textContent = meta.title;
+  });
+  document.querySelectorAll('[data-sound-artist]').forEach((el) => {
+    el.textContent = meta.artist || 'site radio';
+  });
+  document.querySelectorAll('[data-sound-artwork]').forEach((el) => {
+    el.setAttribute('src', meta.artwork);
+  });
+  document.querySelectorAll('[data-sound-action="artist"]').forEach((el) => {
+    const url = meta.url || getCurrentTrack()?.artistUrl;
+    if (url) el.setAttribute('href', url);
+  });
+  updateMediaSession();
+}
+
+function readWidgetCurrentSound(widget) {
+  if (!widget || typeof widget.getCurrentSound !== 'function') {
+    soundCurrentMeta = getFallbackSoundMeta();
+    syncSoundPanelMeta();
+    return;
+  }
+  try {
+    widget.getCurrentSound((sound) => {
+      const fallback = getFallbackSoundMeta();
+      if (!sound) {
+        soundCurrentMeta = fallback;
+        syncSoundPanelMeta();
+        return;
+      }
+      soundCurrentMeta = {
+        title: sound.title || fallback.title,
+        artist: sound.user?.username || sound.publisher_metadata?.artist || fallback.artist,
+        artwork: normalizeSoundCloudArtwork(sound.artwork_url || sound.user?.avatar_url || fallback.artwork),
+        url: sound.permalink_url || fallback.url,
+      };
+      syncSoundPanelMeta();
+    });
+  } catch (_err) {
+    soundCurrentMeta = getFallbackSoundMeta();
+    syncSoundPanelMeta();
+  }
+}
+
+function readWidgetDuration(widget) {
+  if (!widget || typeof widget.getDuration !== 'function') {
+    updateSoundProgressUI();
+    return;
+  }
+  try {
+    widget.getDuration((duration) => {
+      if (Number.isFinite(duration) && duration > 0) {
+        soundCloudDurationMs = duration;
+      }
+      updateSoundProgressUI();
+    });
+  } catch (_err) {
+    updateSoundProgressUI();
+  }
 }
 
 function readStoredSoundState() {
@@ -582,6 +787,7 @@ function writeStoredSoundState() {
 }
 
 function syncSoundUI() {
+  setupSoundPanel();
   if (soundToggle) {
     if (siteSoundEnabled) {
       soundToggle.classList.add('is-active');
@@ -591,30 +797,31 @@ function syncSoundUI() {
       soundToggle.setAttribute('aria-pressed', 'false');
     }
   }
-  // Menu play/pause label reflects what the next click will DO so users
-  // don't have to interpret the current state. Artist href points at the
-  // current track's public page so it's always live before being followed.
+  // Panel play/pause reflects the intended site-radio state as well as the
+  // SoundCloud PLAY event. This keeps the control reversible while a mobile
+  // browser is still deciding whether to allow audio.
   const playItem = document.querySelector('[data-sound-action="play"]');
   if (playItem) {
-    const playing = soundCloudIsActuallyPlaying;
-    playItem.textContent = playing ? 'pause' : 'play';
+    const playing = siteSoundEnabled || soundCloudIsActuallyPlaying;
     playItem.setAttribute('aria-label', playing ? 'Pause site sound' : 'Play site sound');
+    playItem.classList.toggle('is-playing', playing);
   }
   const artistItem = document.querySelector('[data-sound-action="artist"]');
   if (artistItem) {
-    const url = getCurrentTrack()?.artistUrl;
+    const url = getCurrentSoundMeta()?.url || getCurrentTrack()?.artistUrl;
     if (url) artistItem.setAttribute('href', url);
   }
-  const shuffleItem = document.querySelector('[data-sound-action="shuffle"]');
-  if (shuffleItem) {
+  document.querySelectorAll('[data-sound-action="previous"], [data-sound-action="next"]').forEach((item) => {
     // Visually neutral when there's no alternative track, per the agreed
     // "silent no-op" behaviour. The click handler also bails early.
     if (SOUND_TRACKS.length <= 1) {
-      shuffleItem.setAttribute('aria-disabled', 'true');
+      item.setAttribute('aria-disabled', 'true');
     } else {
-      shuffleItem.removeAttribute('aria-disabled');
+      item.removeAttribute('aria-disabled');
     }
-  }
+  });
+  updateSoundProgressUI();
+  syncSoundPanelMeta();
   syncBlogListeningLink();
 }
 
@@ -639,6 +846,8 @@ function bindSoundCloudWidget(iframeEl, initialSeekMs) {
     const widget = window.SC.Widget(iframeEl);
     let didInitialSeek = false;
     widget.bind(window.SC.Widget.Events.READY, () => {
+      readWidgetCurrentSound(widget);
+      readWidgetDuration(widget);
       // Apply saved position via the API. The url-level start_position param
       // is unreliable; seekTo after READY is the documented control surface.
       if (initialSeekMs > 0 && !didInitialSeek) {
@@ -660,6 +869,7 @@ function bindSoundCloudWidget(iframeEl, initialSeekMs) {
         try { widget.seekTo(initialSeekMs); } catch (_err) { /* ignore */ }
       }
       soundCloudIsActuallyPlaying = true;
+      readWidgetCurrentSound(widget);
       // SoundCloud's play/pause is async, so click handlers that call
       // syncSoundUI() immediately see stale state. Refresh again here when
       // the actual transition lands so the menu label flips properly.
@@ -667,12 +877,24 @@ function bindSoundCloudWidget(iframeEl, initialSeekMs) {
     });
     widget.bind(window.SC.Widget.Events.PAUSE, () => {
       soundCloudIsActuallyPlaying = false;
+      updateMediaSession();
       syncSoundUI();
     });
     widget.bind(window.SC.Widget.Events.PLAY_PROGRESS, (data) => {
+      // Ignore the widget's position while the user is dragging the seek bar,
+      // and for a moment after a seek, so the thumb does not jump backwards.
+      if (soundSeeking || Date.now() < soundSeekSettleUntil) return;
       if (data && Number.isFinite(data.currentPosition)) {
         soundCloudLastPositionMs = data.currentPosition;
-        writeStoredSoundState();
+        if (Number.isFinite(data.relativePosition) && data.relativePosition > 0 && !soundCloudDurationMs) {
+          soundCloudDurationMs = data.currentPosition / data.relativePosition;
+        }
+        const currentSecond = Math.floor(soundCloudLastPositionMs / 1000);
+        if (currentSecond !== soundProgressSecond) {
+          soundProgressSecond = currentSecond;
+          updateSoundProgressUI();
+        }
+        scheduleStoredSoundStateWrite();
       }
     });
     widget.bind(window.SC.Widget.Events.FINISH, () => {
@@ -687,6 +909,7 @@ function bindSoundCloudWidget(iframeEl, initialSeekMs) {
         return;
       }
       soundCloudIsActuallyPlaying = false;
+      updateMediaSession();
       writeStoredSoundState();
     });
     return widget;
@@ -698,6 +921,11 @@ function bindSoundCloudWidget(iframeEl, initialSeekMs) {
 function createSoundCloudIframe(startMs, autoPlay = true) {
   if (soundCloudFrame) return;
   const startPositionMs = Math.max(0, Math.floor(startMs || 0));
+  soundCurrentMeta = getFallbackSoundMeta();
+  soundCloudDurationMs = 0;
+  soundProgressSecond = -1;
+  syncSoundPanelMeta();
+  updateSoundProgressUI();
   const container = document.createElement('div');
   container.className = 'soundcloud-player';
   container.setAttribute('aria-hidden', 'true');
@@ -714,6 +942,12 @@ function destroySoundCloudIframe() {
   soundCloudIsActuallyPlaying = false;
   soundCloudFrame?.remove();
   soundCloudFrame = null;
+  soundCloudDurationMs = 0;
+  soundProgressSecond = -1;
+  soundSeeking = false;
+  soundSeekSettleUntil = 0;
+  updateSoundProgressUI();
+  updateMediaSession();
 }
 
 function startSiteSound() {
@@ -879,27 +1113,9 @@ blogRadioToggle?.addEventListener('click', () => {
 syncBlogListeningLink();
 syncBlogReadingRadioUI();
 
-// Header icon now opens the inline menu (play / artist / shuffle). Clicking
-// the icon again closes it. Click-outside and Escape are intentionally not
-// wired up: per the agreed UX, only the icon itself toggles the menu.
+// Header icon opens the compact radio panel. Clicking the icon again closes
+// it; controls live inside the panel on both desktop and mobile.
 soundToggle?.addEventListener('click', () => {
-  // Mobile: no slide-out menu; tapping the icon plays a random track (or stops).
-  // Reuse the (pre-warmed) iframe and play/pause it in-gesture; iOS ignores a
-  // deferred play() on a freshly built iframe, so never destroy/recreate here.
-  if (window.matchMedia('(max-width: 760px)').matches) {
-    if (siteSoundEnabled) {
-      stopSiteSound();
-      window.yeaTrack?.('sound_toggle', { label: 'sound_off', page_path: window.location.pathname });
-    } else {
-      if (!soundCloudFrame && SOUND_TRACKS.length > 1) {
-        currentTrackIndex = Math.floor(Math.random() * SOUND_TRACKS.length);
-      }
-      startSiteSound();
-      window.yeaTrack?.('sound_toggle', { label: 'sound_on_random', page_path: window.location.pathname });
-    }
-    syncSoundUI();
-    return;
-  }
   const isOpen = soundToggle.getAttribute('aria-expanded') === 'true';
   setSoundMenuOpen(!isOpen);
   if (!isOpen) syncSoundUI(); // refresh play label, artist href when opening
@@ -928,6 +1144,9 @@ function switchToTrack(nextIndex) {
 
   currentTrackIndex = normalized;
   soundCloudLastPositionMs = 0;
+  soundCloudDurationMs = 0;
+  soundProgressSecond = -1;
+  soundCurrentMeta = getFallbackSoundMeta();
   const wasEnabled = siteSoundEnabled;
   destroySoundCloudIframe();
   if (wasEnabled) {
@@ -937,7 +1156,7 @@ function switchToTrack(nextIndex) {
   writeStoredSoundState();
 }
 
-// Delegated handler for the three menu items.
+// Delegated handler for the compact radio panel.
 document.addEventListener('click', (event) => {
   const item = event.target instanceof Element ? event.target.closest('[data-sound-action]') : null;
   if (!item) return;
@@ -945,7 +1164,7 @@ document.addEventListener('click', (event) => {
 
   if (action === 'play') {
     event.preventDefault();
-    if (soundCloudIsActuallyPlaying) {
+    if (siteSoundEnabled || soundCloudIsActuallyPlaying) {
       stopSiteSound();
       window.yeaTrack?.('sound_toggle', { label: 'sound_off', page_path: window.location.pathname });
     } else {
@@ -956,11 +1175,22 @@ document.addEventListener('click', (event) => {
     return;
   }
 
-  if (action === 'shuffle') {
+  if (action === 'previous') {
+    event.preventDefault();
+    if (SOUND_TRACKS.length <= 1) return; // silent no-op per spec
+    switchToTrack(currentTrackIndex - 1);
+    window.yeaTrack?.('sound_previous', {
+      label: getCurrentTrack().id,
+      page_path: window.location.pathname,
+    });
+    return;
+  }
+
+  if (action === 'next') {
     event.preventDefault();
     if (SOUND_TRACKS.length <= 1) return; // silent no-op per spec
     switchToTrack(currentTrackIndex + 1);
-    window.yeaTrack?.('sound_shuffle', {
+    window.yeaTrack?.('sound_next', {
       label: getCurrentTrack().id,
       page_path: window.location.pathname,
     });
@@ -978,6 +1208,35 @@ document.addEventListener('click', (event) => {
       page_path: window.location.pathname,
     });
   }
+});
+
+document.addEventListener('input', (event) => {
+  const range = event.target instanceof Element ? event.target.closest('[data-sound-progress]') : null;
+  if (!range || soundCloudDurationMs <= 0) return;
+  const value = Number(range.value);
+  if (!Number.isFinite(value)) return;
+  soundSeeking = true;
+  soundCloudLastPositionMs = Math.max(0, Math.min(soundCloudDurationMs, (value / 1000) * soundCloudDurationMs));
+  soundProgressSecond = Math.floor(soundCloudLastPositionMs / 1000);
+  updateSoundProgressUI();
+});
+
+document.addEventListener('change', (event) => {
+  const range = event.target instanceof Element ? event.target.closest('[data-sound-progress]') : null;
+  if (!range || soundCloudDurationMs <= 0) return;
+  const value = Number(range.value);
+  if (!Number.isFinite(value)) return;
+  const targetMs = Math.max(0, Math.min(soundCloudDurationMs, (value / 1000) * soundCloudDurationMs));
+  soundCloudLastPositionMs = targetMs;
+  soundProgressSecond = Math.floor(soundCloudLastPositionMs / 1000);
+  updateSoundProgressUI();
+  if (soundCloudWidget) {
+    try { soundCloudWidget.seekTo(targetMs); } catch (_err) { /* ignore */ }
+  }
+  // Hold off progress-driven UI briefly so the freshly-seeked spot sticks.
+  soundSeekSettleUntil = Date.now() + 900;
+  soundSeeking = false;
+  writeStoredSoundState();
 });
 
 function pauseSiteSoundForVideo() {
@@ -1019,8 +1278,8 @@ window.addEventListener('beforeunload', writeStoredSoundState);
 const AUTO_RESUME_MAX_AGE_MS = 60_000;
 
 (() => {
-  // Always sync the menu UI on load so play label / artist href / shuffle
-  // disabled state reflect the current track even when sound is off.
+  // Always sync the radio panel on load so play label, artist href and
+  // disabled states reflect the current track even when sound is off.
   const stored = readStoredSoundState();
   if (stored) {
     soundCloudLastPositionMs = stored.positionMs;
@@ -1343,11 +1602,29 @@ function renderOrbit(now) {
   });
 }
 
+let orbitRunning = false;
+let orbitRafId = 0;
+
 function animateOrbit(now) {
   renderOrbit(now);
   // Orbit + cosmic idle are the page's signature motion; keep them running
   // even under prefers-reduced-motion (gentle continuous rotation).
-  requestAnimationFrame(animateOrbit);
+  if (orbitRunning) orbitRafId = requestAnimationFrame(animateOrbit);
+}
+
+function startOrbit() {
+  if (orbitRunning) return;
+  orbitRunning = true;
+  previousFrame = performance.now(); // fresh delta so a long pause doesn't jump
+  orbitRafId = requestAnimationFrame(animateOrbit);
+}
+
+function stopOrbit() {
+  orbitRunning = false;
+  if (orbitRafId) {
+    cancelAnimationFrame(orbitRafId);
+    orbitRafId = 0;
+  }
 }
 
 orbitItems.forEach((item) => {
@@ -1432,10 +1709,100 @@ blackHoleTrigger?.addEventListener('keydown', (event) => {
 });
 
 if (orbitSystem && orbitItems.length) {
-  requestAnimationFrame(animateOrbit);
+  startOrbit();
+  // Pause the orbit's per-frame work whenever the stage scrolls out of view.
+  // On the home page this frees the main thread exactly while the contact form
+  // (and its Turnstile widget) is on screen, where FPS used to drop. Keyed off
+  // the orbit's OWN visibility, so it also behaves correctly when orbit and
+  // contact sit close together (the demo): it freezes only once orbit is gone.
+  if ('IntersectionObserver' in window) {
+    const orbitVisibility = new IntersectionObserver((entries) => {
+      entries.forEach((entry) => {
+        if (entry.isIntersecting) startOrbit();
+        else stopOrbit();
+      });
+    }, { threshold: 0 });
+    orbitVisibility.observe(orbitSystem);
+  }
 }
 
 const CONTACT_ENDPOINT = 'https://yea-contact.highlevelsocial.workers.dev';
+
+// Cloudflare Turnstile runs a continuous background loop for as long as its
+// widget is mounted, stealing main-thread time from the orbit animation. Load
+// and render it only while the contact form is engaged, then tear it down
+// (turnstile.remove) on send or when the visitor scrolls away, so it costs
+// nothing the rest of the time.
+const TURNSTILE_SCRIPT_SRC = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
+let turnstileScriptPromise = null;
+
+function loadTurnstileScript() {
+  if (window.turnstile?.render) return Promise.resolve();
+  if (turnstileScriptPromise) return turnstileScriptPromise;
+  turnstileScriptPromise = new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = TURNSTILE_SCRIPT_SRC;
+    script.async = true;
+    script.defer = true;
+    script.addEventListener('load', () => {
+      if (window.turnstile?.render) resolve();
+      else reject(new Error('turnstile unavailable'));
+    });
+    script.addEventListener('error', () => {
+      turnstileScriptPromise = null; // allow a later retry
+      reject(new Error('turnstile failed to load'));
+    });
+    document.head.appendChild(script);
+  });
+  return turnstileScriptPromise;
+}
+
+function createLazyTurnstile(container) {
+  let widgetId = null;
+  let removeTimer = 0;
+
+  const mount = () => {
+    if (widgetId !== null) return;
+    loadTurnstileScript()
+      .then(() => {
+        if (widgetId !== null) return; // observer fired again while loading
+        try {
+          widgetId = window.turnstile.render(container, {
+            sitekey: container.dataset.sitekey,
+            theme: container.dataset.theme || 'dark',
+          });
+        } catch (_err) { /* render rejected; submit surfaces the failure */ }
+      })
+      .catch(() => { /* offline or blocked; the Worker fails the submit closed */ });
+  };
+
+  const unmount = () => {
+    if (widgetId === null) return;
+    try { window.turnstile?.remove(widgetId); } catch (_err) { /* ignore */ }
+    widgetId = null;
+  };
+
+  return {
+    activate() {
+      window.clearTimeout(removeTimer);
+      mount();
+    },
+    // Debounced so scroll jitter near the viewport edge does not thrash mount/unmount.
+    deactivate() {
+      window.clearTimeout(removeTimer);
+      removeTimer = window.setTimeout(unmount, 1200);
+    },
+    reset() {
+      if (widgetId !== null) {
+        try { window.turnstile?.reset(widgetId); } catch (_err) { /* ignore */ }
+      }
+    },
+    teardown() {
+      window.clearTimeout(removeTimer);
+      unmount();
+    },
+  };
+}
 
 document.querySelectorAll('.contact-form').forEach((form) => {
   let status = form.querySelector('.contact-form__status');
@@ -1451,6 +1818,23 @@ document.querySelectorAll('.contact-form').forEach((form) => {
     status.classList.remove('is-success', 'is-error');
     if (state) status.classList.add(`is-${state}`);
   };
+
+  const turnstileEl = form.querySelector('.cf-turnstile');
+  const turnstile = turnstileEl ? createLazyTurnstile(turnstileEl) : null;
+  if (turnstile) {
+    // First focus guarantees a token even without IntersectionObserver; the
+    // observer (un)mounts on scroll so it is off whenever the form is offscreen.
+    form.addEventListener('focusin', () => turnstile.activate());
+    if ('IntersectionObserver' in window) {
+      const observer = new IntersectionObserver((entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) turnstile.activate();
+          else turnstile.deactivate();
+        });
+      }, { rootMargin: '300px 0px 300px 0px', threshold: 0 });
+      observer.observe(form);
+    }
+  }
 
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -1479,13 +1863,16 @@ document.querySelectorAll('.contact-form').forEach((form) => {
       }
 
       form.reset();
-      window.turnstile?.reset();
+      // Sent: drop Turnstile so it stops working in the background. A later
+      // focus re-mounts it if the visitor sends another message.
+      turnstile?.teardown();
       window.yeaTrack?.('contact_form_submit', {
         page_path: window.location.pathname,
       });
       setStatus('Thanks, your message has been sent. I will get back to you soon.', 'success');
     } catch (error) {
-      window.turnstile?.reset();
+      // Keep the widget mounted on failure so the visitor can retry with a fresh token.
+      turnstile?.reset();
       window.yeaTrack?.('contact_form_error', {
         label: error?.message || 'send_failed',
         page_path: window.location.pathname,
